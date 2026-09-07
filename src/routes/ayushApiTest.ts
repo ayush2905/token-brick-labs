@@ -18,8 +18,7 @@ const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)",
 ];
 
-// Vitalik's public address - just to demo reading a balance
-const SAMPLE_ADDRESS = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
+const DEFAULT_ADDRESS = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
 
 interface CacheEntry {
   data: Record<string, unknown>;
@@ -56,7 +55,7 @@ async function withRetry<T>(fn: () => Promise<T>, retries = MAX_RETRIES): Promis
   throw new Error("Unreachable");
 }
 
-async function fetchContractData() {
+async function fetchContractData(walletAddress: string) {
   const provider = new ethers.JsonRpcProvider(SEPOLIA_RPC, undefined, {
     batchMaxCount: 1,
   });
@@ -66,7 +65,7 @@ async function fetchContractData() {
   const symbol = (await contract.symbol()) as string;
   const decimals = (await contract.decimals()) as bigint;
   const totalSupply = (await contract.totalSupply()) as bigint;
-  const balance = (await contract.balanceOf(SAMPLE_ADDRESS)) as bigint;
+  const balance = (await contract.balanceOf(walletAddress)) as bigint;
   const blockNumber = await provider.getBlockNumber();
 
   return {
@@ -80,8 +79,8 @@ async function fetchContractData() {
       decimals: Number(decimals),
       totalSupply: ethers.formatUnits(totalSupply, decimals),
     },
-    sampleQuery: {
-      address: SAMPLE_ADDRESS,
+    walletQuery: {
+      address: walletAddress,
       balance: ethers.formatUnits(balance, decimals),
       unit: symbol,
     },
@@ -89,13 +88,21 @@ async function fetchContractData() {
   };
 }
 
-router.get("/AyushApiTest", async (_req: Request, res: Response) => {
+router.post("/AyushApiTest", async (req: Request, res: Response) => {
   try {
-    const cacheKey = `link_${SAMPLE_ADDRESS}`;
+    const { address } = req.body as { address?: string };
+    const walletAddress = address || DEFAULT_ADDRESS;
+
+    if (!ethers.isAddress(walletAddress)) {
+      res.status(400).json({ success: false, error: "Invalid Ethereum address" });
+      return;
+    }
+
+    const cacheKey = `link_${walletAddress.toLowerCase()}`;
     const cached = getCached(cacheKey);
 
     if (cached) {
-      console.log("\n--- AyushApiTest: Returning cached response ---");
+      console.log(`\n--- AyushApiTest: Returning cached response for ${walletAddress} ---`);
       res.json({ ...cached, cached: true });
       return;
     }
@@ -103,8 +110,9 @@ router.get("/AyushApiTest", async (_req: Request, res: Response) => {
     console.log("\n--- AyushApiTest: Fetching on-chain data from Sepolia ---");
     console.log(`RPC: ${SEPOLIA_RPC}`);
     console.log(`Contract: ${LINK_TOKEN_ADDRESS} (LINK Token)`);
+    console.log(`Wallet: ${walletAddress}`);
 
-    const result = await withRetry(fetchContractData);
+    const result = await withRetry(() => fetchContractData(walletAddress));
 
     setCache(cacheKey, result);
 
